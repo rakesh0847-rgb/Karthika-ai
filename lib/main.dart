@@ -1,6 +1,121 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest_all.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:flutter_timezone/flutter_timezone.dart';
+
+class OrmaNotifications {
+  OrmaNotifications._();
+  static final OrmaNotifications instance = OrmaNotifications._();
+
+  final FlutterLocalNotificationsPlugin plugin =
+      FlutterLocalNotificationsPlugin();
+  bool ready = false;
+
+  Future<void> initialize() async {
+    if (ready) return;
+    tzdata.initializeTimeZones();
+    try {
+      final zone = await FlutterTimezone.getLocalTimezone();
+      tz.setLocalLocation(tz.getLocation(zone.identifier));
+    } catch (_) {
+      tz.setLocalLocation(tz.getLocation('Asia/Kolkata'));
+    }
+
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const ios = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    await plugin.initialize(
+      settings: const InitializationSettings(android: android, iOS: ios),
+    );
+    ready = true;
+  }
+
+  Future<void> requestPermission() async {
+    await initialize();
+    await plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+    await plugin.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>()
+        ?.requestPermissions(alert: true, badge: true, sound: true);
+  }
+
+  int _stableId(String value, int suffix) {
+    var hash = 2166136261;
+    for (final unit in value.codeUnits) {
+      hash = ((hash ^ unit) * 16777619) & 0x7fffffff;
+    }
+    return ((hash * 10) + suffix) & 0x7fffffff;
+  }
+
+  Future<void> scheduleFor(Reminder reminder, {required bool malayalam}) async {
+    await initialize();
+    final base = reminder.id;
+    for (var i = 0; i < 4; i++) {
+      await plugin.cancel(id: _stableId(base, i));
+    }
+    if (reminder.paid || reminder.isComplete) return;
+
+    final due = DateTime(
+      reminder.dueDate.year, reminder.dueDate.month, reminder.dueDate.day);
+    final items = <({int daysBefore, int hour, int minute, int suffix, String ml, String en})>[
+      (daysBefore: 7, hour: 9, minute: 0, suffix: 0,
+       ml: '7 ദിവസത്തിനകം ${reminder.title} അടയ്ക്കണം',
+       en: '${reminder.title} payment is due in 7 days'),
+      (daysBefore: 1, hour: 9, minute: 0, suffix: 1,
+       ml: 'നാളെ ${reminder.title} അടയ്ക്കേണ്ടതാണ്',
+       en: '${reminder.title} payment is due tomorrow'),
+      (daysBefore: 0, hour: 8, minute: 0, suffix: 2,
+       ml: 'ഇന്ന് ${reminder.title} അടയ്ക്കേണ്ട ദിവസമാണ്',
+       en: '${reminder.title} payment is due today'),
+      (daysBefore: -1, hour: 9, minute: 0, suffix: 3,
+       ml: '${reminder.title} അടവ് കുടിശ്ശികയാണ്',
+       en: '${reminder.title} payment is overdue'),
+    ];
+
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'orma_payment_reminders',
+        'ORMA Payment Reminders',
+        channelDescription: 'EMI, loan, chitty and bill due-date reminders',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(),
+    );
+
+    for (final item in items) {
+      final date = due.subtract(Duration(days: item.daysBefore));
+      final scheduled = tz.TZDateTime(
+        tz.local, date.year, date.month, date.day, item.hour, item.minute);
+      if (!scheduled.isAfter(tz.TZDateTime.now(tz.local))) continue;
+      await plugin.zonedSchedule(
+        id: _stableId(base, item.suffix),
+        title: malayalam ? 'ORMA – ഓർമ്മപ്പെടുത്തൽ' : 'ORMA – Reminder',
+        body: malayalam ? item.ml : item.en,
+        scheduledDate: scheduled,
+        notificationDetails: details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: reminder.id,
+      );
+    }
+  }
+
+  Future<void> rescheduleAll(List<Reminder> reminders,
+      {required bool malayalam}) async {
+    await initialize();
+    await plugin.cancelAll();
+    for (final reminder in reminders) {
+      await scheduleFor(reminder, malayalam: malayalam);
+    }
+  }
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -165,6 +280,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     load();
+    OrmaNotifications.instance.initialize();
   }
 
   Future<void> load() async {
@@ -178,6 +294,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       } catch (_) {}
     }
     if (mounted) setState(() => loading = false);
+    await OrmaNotifications.instance.rescheduleAll(reminders, malayalam: malayalam);
   }
 
   Future<void> save() async {
@@ -213,6 +330,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     });
     await save();
+    await OrmaNotifications.instance.rescheduleAll(reminders, malayalam: malayalam);
   }
 
   DateTime nextDue(Reminder r) {
@@ -306,6 +424,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     });
     await save();
+    await OrmaNotifications.instance.rescheduleAll(reminders, malayalam: malayalam);
   }
 
   Future<void> delete(Reminder r) async {
@@ -324,6 +443,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (ok == true) {
       setState(() => reminders.removeWhere((e) => e.id == r.id));
       await save();
+      await OrmaNotifications.instance.rescheduleAll(reminders, malayalam: malayalam);
     }
   }
 
@@ -358,6 +478,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           TextButton(
             onPressed: () => setState(() => malayalam = !malayalam),
             child: Text(malayalam ? 'EN' : 'മലയാളം')),
+          IconButton(
+            tooltip: tr('അറിയിപ്പുകൾ അനുവദിക്കുക', 'Enable notifications'),
+            onPressed: () async {
+              await OrmaNotifications.instance.requestPermission();
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(tr('അറിയിപ്പ് അനുമതി അഭ്യർത്ഥിച്ചു', 'Notification permission requested'))));
+            },
+            icon: const Icon(Icons.notifications_active_outlined)),
           IconButton(onPressed: settings, icon: const Icon(Icons.settings_outlined)),
         ],
       ),
