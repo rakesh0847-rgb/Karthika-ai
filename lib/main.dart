@@ -98,8 +98,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 Expanded(
                   child: _actionCard(
                     Icons.chat_bubble_outline,
-                    malayalam ? 'Chat' : 'Chat',
+                    'Chat',
                     malayalam ? 'ടൈപ്പ് ചെയ്യുക' : 'Type a message',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ChatScreen(malayalam: malayalam),
+                        ),
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -157,25 +165,34 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _actionCard(IconData icon, String title, String subtitle) {
+  Widget _actionCard(
+    IconData icon,
+    String title,
+    String subtitle, {
+    VoidCallback? onTap,
+  }) {
     return Card(
       elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Icon(icon, size: 35, color: const Color(0xFF9C426E)),
-            const SizedBox(height: 10),
-            Text(title, style: const TextStyle(
-              fontWeight: FontWeight.bold,
-            )),
-            const SizedBox(height: 5),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12),
-            ),
-          ],
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Icon(icon, size: 35, color: const Color(0xFF9C426E)),
+              const SizedBox(height: 10),
+              Text(title, style: const TextStyle(
+                fontWeight: FontWeight.bold,
+              )),
+              const SizedBox(height: 5),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -187,6 +204,124 @@ class _HomeScreenState extends State<HomeScreen> {
         leading: Icon(icon, color: const Color(0xFF9C426E)),
         title: Text(title),
         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+      ),
+    );
+  }
+}
+
+
+class ChatScreen extends StatefulWidget {
+  final bool malayalam;
+
+  const ChatScreen({super.key, required this.malayalam});
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final TextEditingController _messageController = TextEditingController();
+  final List<Map<String, String>> _messages = [];
+
+  @override
+  void dispose() {
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  void _sendMessage() {
+    final message = _messageController.text.trim();
+    if (message.isEmpty) return;
+
+    setState(() {
+      _messages.add({'role': 'user', 'text': message});
+      _messageController.clear();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Karthika Chat'),
+        backgroundColor: const Color(0xFFFFF8FA),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: _messages.isEmpty
+                ? Center(
+                    child: Text(
+                      widget.malayalam
+                          ? 'ഹായ്! ഞാൻ കാർത്തിക. എന്നോട് സംസാരിക്കൂ.'
+                          : 'Hi! I am Karthika. Start a conversation.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 18),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final item = _messages[index];
+                      final isUser = item['role'] == 'user';
+                      return Align(
+                        alignment: isUser
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          padding: const EdgeInsets.all(12),
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.78,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isUser
+                                ? const Color(0xFFEFD7E2)
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Text(item['text'] ?? ''),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _sendMessage(),
+                      decoration: InputDecoration(
+                        hintText: widget.malayalam
+                            ? 'സന്ദേശം എഴുതുക...'
+                            : 'Type a message...',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _sendMessage,
+                    icon: const Icon(Icons.send),
+                    color: const Color(0xFF9C426E),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
