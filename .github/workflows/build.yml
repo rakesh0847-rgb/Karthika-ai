@@ -84,15 +84,16 @@ jobs:
 
           if "desugar_jdk_libs" not in g:
               match = re.search(r"(?m)^(\s*)dependencies\s*\{", g)
-              if not match:
-                  raise SystemExit("Could not find dependencies block in app/build.gradle.kts")
+          if match:
               indent = match.group(1) + "    "
               insert_at = match.end()
               g = (
-                  g[:insert_at]
-                  + '\n' + indent + 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
-                  + g[insert_at:]
+                   g[:insert_at]
+                   + '\n' + indent + 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+                   + g[insert_at:]
               )
+          else:
+              g += '\n\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
 
           if "isCoreLibraryDesugaringEnabled = true" not in g:
               raise SystemExit("Desugaring is not enabled")
