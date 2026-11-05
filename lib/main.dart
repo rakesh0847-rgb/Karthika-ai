@@ -513,7 +513,8 @@ class ReminderForm extends StatefulWidget {
 
 class _ReminderFormState extends State<ReminderForm> {
   final formKey = GlobalKey<FormState>();
-  late TextEditingController title, amount, notes;
+  late TextEditingController title, amount, notes, previousCount, previousAmount;
+  final List<DateTime> previousPaymentDates = [];
   late String category, frequency, monthlyMode, weekday, monthlyWeek;
   late DateTime startDate, dueDate;
   DateTime? endDate;
@@ -536,6 +537,15 @@ class _ReminderFormState extends State<ReminderForm> {
     title = TextEditingController(text: r?.title ?? '');
     amount = TextEditingController(text: r == null ? '' : r.amount.toString());
     notes = TextEditingController(text: r?.notes ?? '');
+    previousCount = TextEditingController(text: r == null ? '0' : '${r.paidInstallments}');
+    previousAmount = TextEditingController(text: r == null ? '0' : r.totalPaidAmount.toStringAsFixed(2));
+    if (r != null) {
+      for (final entry in r.paymentHistory) {
+        final dateText = entry.split('|').first.trim();
+        final parsed = DateTime.tryParse(dateText);
+        if (parsed != null) previousPaymentDates.add(parsed);
+      }
+    }
     category = r?.category ?? 'EMI';
     frequency = r?.frequency ?? 'Monthly';
     monthlyMode = r?.monthlyMode ?? 'Date';
@@ -551,6 +561,7 @@ class _ReminderFormState extends State<ReminderForm> {
   @override
   void dispose() {
     title.dispose(); amount.dispose(); notes.dispose();
+    previousCount.dispose(); previousAmount.dispose();
     super.dispose();
   }
 
@@ -571,9 +582,36 @@ class _ReminderFormState extends State<ReminderForm> {
     });
   }
 
+  Future<void> addPreviousPaymentDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked != null) {
+      setState(() => previousPaymentDates.add(picked));
+      previousPaymentDates.sort();
+    }
+  }
+
   void save() {
     if (!formKey.currentState!.validate()) return;
     final count = frequency == 'One Time' ? 1 : null;
+    final oldCount = int.tryParse(previousCount.text.trim()) ?? 0;
+    final oldAmount = double.tryParse(previousAmount.text.trim()) ?? 0;
+    if (oldCount < 0 || oldAmount < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('മുൻപ് അടച്ച എണ്ണം/തുക ശരിയായി നൽകുക',
+            'Enter valid previous installment count and amount'))));
+      return;
+    }
+    if (count != null && oldCount > count) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('മുൻപ് അടച്ച തവണകൾ ആകെ തവണകളെക്കാൾ കൂടുതലാകരുത്',
+            'Previous paid installments cannot exceed total installments'))));
+      return;
+    }
     if (frequency != 'One Time' && (!useEndDate || endDate == null)) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(tr('ആവർത്തിക്കുന്ന അടവിന് അവസാന തീയതി നൽകുക',
@@ -594,13 +632,15 @@ class _ReminderFormState extends State<ReminderForm> {
       dueDate: dueDate, startDate: startDate,
       endDate: useEndDate ? endDate : null,
       totalInstallments: count,
-      paidInstallments: old?.paidInstallments ?? 0,
+      paidInstallments: old == null ? oldCount : old.paidInstallments,
       frequency: frequency, monthlyMode: monthlyMode,
       weekday: weekday, monthlyWeek: monthlyWeek,
       paid: paid, notes: notes.text.trim(),
-      paymentHistory: old?.paymentHistory ?? [],
+      paymentHistory: old == null
+          ? previousPaymentDates.map((d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')} | Previous payment').toList()
+          : old.paymentHistory,
       currentInstallmentPaid: old?.currentInstallmentPaid ?? 0,
-      totalPaidAmount: old?.totalPaidAmount ?? 0,
+      totalPaidAmount: old == null ? oldAmount : old.totalPaidAmount,
     );
     Navigator.pop(context, result);
   }
@@ -705,6 +745,57 @@ class _ReminderFormState extends State<ReminderForm> {
               style: const TextStyle(color: Colors.black54))),
         ],
         const SizedBox(height: 12),
+        if (frequency != 'One Time') ...[
+          const SizedBox(height: 18),
+          Text(tr('മുൻപ് അടച്ച തുകകൾ (Existing Payment)', 'Previous payments (Existing Payment)'),
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: previousCount,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: tr('ഇതിനകം അടച്ച തവണകളുടെ എണ്ണം', 'Installments already paid'),
+              border: const OutlineInputBorder()),
+            validator: (v) {
+              final n = int.tryParse(v ?? '0');
+              return n == null || n < 0
+                ? tr('ശരിയായ എണ്ണം നൽകുക', 'Enter a valid count') : null;
+            }),
+          const SizedBox(height: 10),
+          TextFormField(
+            controller: previousAmount,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: tr('ഇതിനകം അടച്ച ആകെ തുക (₹)', 'Total amount already paid (₹)'),
+              border: const OutlineInputBorder()),
+            validator: (v) {
+              final n = double.tryParse(v ?? '0');
+              return n == null || n < 0
+                ? tr('ശരിയായ തുക നൽകുക', 'Enter a valid amount') : null;
+            }),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(child: Text(tr('മുൻപത്തെ അടവുകളുടെ തീയതികൾ (ഐച്ഛികം)',
+              'Previous payment dates (optional)'))),
+            IconButton(onPressed: addPreviousPaymentDate,
+              icon: const Icon(Icons.add_circle_outline)),
+          ]),
+          if (previousPaymentDates.isEmpty)
+            Text(tr('തീയതികൾ ചേർക്കാത്താലും എണ്ണം, തുക എന്നിവ ഉപയോഗിച്ച് കണക്കാക്കാം.',
+              'You can leave dates blank; count and amount are still recorded.'),
+              style: const TextStyle(color: Colors.black54))
+          else
+            ...previousPaymentDates.asMap().entries.map((entry) => ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.history),
+              title: Text('${entry.value.day}/${entry.value.month}/${entry.value.year}'),
+              trailing: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => setState(() => previousPaymentDates.removeAt(entry.key)),
+              ),
+            )),
+        ],
         TextFormField(controller: notes, maxLines: 2,
           decoration: InputDecoration(labelText: tr('കുറിപ്പുകൾ (ഐച്ഛികം)', 'Notes (optional)'),
             border: const OutlineInputBorder())),
