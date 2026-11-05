@@ -1,0 +1,48 @@
+
+name: Karthika AI Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter Platforms
+        run: flutter create --platforms=android,web .
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Build Android APK
+        run: flutter build apk --release
+
+      - name: Build Web App
+        run: flutter build web --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Karthika-AI-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload Web App
+        uses: actions/upload-artifact@v4
+        with:
+          name: Karthika-AI-Web
+          path: build/web/
