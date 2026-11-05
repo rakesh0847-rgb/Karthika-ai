@@ -25,7 +25,7 @@ class OrmaApp extends StatelessWidget {
 
 class Reminder {
   String id, title, category, frequency, monthlyMode, weekday, monthlyWeek;
-  double amount;
+  double amount, currentInstallmentPaid, totalPaidAmount;
   DateTime dueDate, startDate;
   DateTime? endDate;
   int? totalInstallments;
@@ -35,61 +35,113 @@ class Reminder {
   List<String> paymentHistory;
 
   Reminder({
-    required this.id,
-    required this.title,
-    required this.category,
-    required this.amount,
-    required this.dueDate,
-    required this.startDate,
-    this.endDate,
-    this.totalInstallments,
-    this.paidInstallments = 0,
-    this.frequency = 'One Time',
-    this.monthlyMode = 'Date',
-    this.weekday = 'Monday',
-    this.monthlyWeek = 'First',
-    this.paid = false,
-    this.notes = '',
+    required this.id, required this.title, required this.category,
+    required this.amount, required this.dueDate, required this.startDate,
+    this.endDate, this.totalInstallments, this.paidInstallments = 0,
+    this.frequency = 'One Time', this.monthlyMode = 'Date',
+    this.weekday = 'Monday', this.monthlyWeek = 'First',
+    this.paid = false, this.notes = '',
+    this.currentInstallmentPaid = 0, this.totalPaidAmount = 0,
     List<String>? paymentHistory,
   }) : paymentHistory = paymentHistory ?? [];
 
+  int get calculatedInstallments {
+    if (frequency == 'One Time') return 1;
+    if (endDate == null) return totalInstallments ?? 0;
+    var count = 0;
+    var cursor = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate!.year, endDate!.month, endDate!.day);
+    while (!cursor.isAfter(end) && count < 5000) {
+      count++;
+      final next = nextScheduledDate(
+          cursor, frequency, monthlyMode, weekday, monthlyWeek);
+      if (!next.isAfter(cursor)) break;
+      cursor = next;
+    }
+    return count;
+  }
+
   Map<String, dynamic> toJson() => {
-        'id': id, 'title': title, 'category': category, 'amount': amount,
-        'dueDate': dueDate.toIso8601String(),
-        'startDate': startDate.toIso8601String(),
-        'endDate': endDate?.toIso8601String(),
-        'totalInstallments': totalInstallments,
-        'paidInstallments': paidInstallments,
-        'frequency': frequency, 'monthlyMode': monthlyMode,
-        'weekday': weekday, 'monthlyWeek': monthlyWeek,
-        'paid': paid, 'notes': notes, 'paymentHistory': paymentHistory,
-      };
+    'id': id, 'title': title, 'category': category, 'amount': amount,
+    'dueDate': dueDate.toIso8601String(),
+    'startDate': startDate.toIso8601String(),
+    'endDate': endDate?.toIso8601String(),
+    'totalInstallments': calculatedInstallments,
+    'paidInstallments': paidInstallments,
+    'frequency': frequency, 'monthlyMode': monthlyMode,
+    'weekday': weekday, 'monthlyWeek': monthlyWeek,
+    'paid': paid, 'notes': notes, 'paymentHistory': paymentHistory,
+    'currentInstallmentPaid': currentInstallmentPaid,
+    'totalPaidAmount': totalPaidAmount,
+  };
 
   factory Reminder.fromJson(Map<String, dynamic> j) => Reminder(
-        id: j['id'] ?? DateTime.now().microsecondsSinceEpoch.toString(),
-        title: j['title'] ?? '',
-        category: j['category'] ?? 'Other',
-        amount: (j['amount'] as num?)?.toDouble() ?? 0,
-        dueDate: DateTime.tryParse(j['dueDate'] ?? '') ?? DateTime.now(),
-        startDate: DateTime.tryParse(j['startDate'] ?? j['dueDate'] ?? '') ??
-            DateTime.now(),
-        endDate: j['endDate'] == null ? null : DateTime.tryParse(j['endDate']),
-        totalInstallments: j['totalInstallments'] as int?,
-        paidInstallments: j['paidInstallments'] as int? ?? 0,
-        frequency: j['frequency'] ?? 'One Time',
-        monthlyMode: j['monthlyMode'] ?? 'Date',
-        weekday: j['weekday'] ?? 'Monday',
-        monthlyWeek: j['monthlyWeek'] ?? 'First',
-        paid: j['paid'] as bool? ?? false,
-        notes: j['notes'] ?? '',
-        paymentHistory: (j['paymentHistory'] as List?)
-                ?.map((e) => e.toString()).toList() ??
-            [],
-      );
+    id: j['id'] ?? DateTime.now().microsecondsSinceEpoch.toString(),
+    title: j['title'] ?? '', category: j['category'] ?? 'Other',
+    amount: (j['amount'] as num?)?.toDouble() ?? 0,
+    dueDate: DateTime.tryParse(j['dueDate'] ?? '') ?? DateTime.now(),
+    startDate: DateTime.tryParse(j['startDate'] ?? j['dueDate'] ?? '') ??
+        DateTime.now(),
+    endDate: j['endDate'] == null ? null : DateTime.tryParse(j['endDate']),
+    totalInstallments: j['totalInstallments'] as int?,
+    paidInstallments: j['paidInstallments'] as int? ?? 0,
+    frequency: j['frequency'] ?? 'One Time',
+    monthlyMode: j['monthlyMode'] ?? 'Date',
+    weekday: j['weekday'] ?? 'Monday',
+    monthlyWeek: j['monthlyWeek'] ?? 'First',
+    paid: j['paid'] as bool? ?? false, notes: j['notes'] ?? '',
+    paymentHistory: (j['paymentHistory'] as List?)
+        ?.map((e) => e.toString()).toList() ?? [],
+    currentInstallmentPaid:
+        (j['currentInstallmentPaid'] as num?)?.toDouble() ?? 0,
+    totalPaidAmount: (j['totalPaidAmount'] as num?)?.toDouble() ??
+        ((j['paidInstallments'] as int? ?? 0) *
+            ((j['amount'] as num?)?.toDouble() ?? 0)),
+  );
 
   bool get isComplete =>
-      (totalInstallments != null && paidInstallments >= totalInstallments!) ||
+      (calculatedInstallments > 0 &&
+          paidInstallments >= calculatedInstallments) ||
       (endDate != null && dueDate.isAfter(endDate!));
+}
+
+int _weekdayNumber(String day) => const {
+  'Monday': 1, 'Tuesday': 2, 'Wednesday': 3, 'Thursday': 4,
+  'Friday': 5, 'Saturday': 6, 'Sunday': 7,
+}[day] ?? 1;
+
+DateTime nextScheduledDate(DateTime from, String frequency,
+    String monthlyMode, String weekday, String monthlyWeek) {
+  switch (frequency) {
+    case 'Daily':
+      return from.add(const Duration(days: 1));
+    case 'Weekly':
+      return from.add(const Duration(days: 7));
+    case 'Monthly':
+      if (monthlyMode == 'Weekday') {
+        final first = DateTime(from.year, from.month + 1, 1);
+        final wd = _weekdayNumber(weekday);
+        final offset = (wd - first.weekday + 7) % 7;
+        final ordinal = {'First': 0, 'Second': 1, 'Third': 2,
+          'Fourth': 3, 'Last': -1}[monthlyWeek] ?? 0;
+        if (ordinal == -1) {
+          final last = DateTime(first.year, first.month + 1, 0);
+          return last.subtract(Duration(days: (last.weekday - wd + 7) % 7));
+        }
+        return DateTime(first.year, first.month, 1 + offset + ordinal * 7);
+      }
+      final nextMonth = DateTime(from.year, from.month + 1, 1);
+      final lastDay = DateTime(nextMonth.year, nextMonth.month + 1, 0).day;
+      return DateTime(nextMonth.year, nextMonth.month,
+          from.day > lastDay ? lastDay : from.day);
+    case 'Yearly':
+      final nextYear = DateTime(from.year + 1, from.month, 1);
+      final lastDay = DateTime(nextYear.year, nextYear.month + 1, 0).day;
+      return DateTime(nextYear.year, nextYear.month,
+          from.day > lastDay ? lastDay : from.day);
+    default:
+      return from;
+  }
 }
 
 class DashboardScreen extends StatefulWidget {
@@ -208,21 +260,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> markPaid(Reminder r) async {
-    final paidOn = DateTime.now();
+    final controller = TextEditingController(text: r.amount.toStringAsFixed(2));
+    final value = await showDialog<double>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr('അടച്ച തുക രേഖപ്പെടുത്തുക', 'Record payment')),
+        content: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+            labelText: tr('ഇപ്പോൾ അടച്ച തുക (₹)', 'Amount paid now (₹)')),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context),
+            child: Text(tr('റദ്ദാക്കുക', 'Cancel'))),
+          FilledButton(
+            onPressed: () {
+              final amount = double.tryParse(controller.text.trim());
+              if (amount != null && amount > 0) Navigator.pop(context, amount);
+            },
+            child: Text(tr('സേവ്', 'Save'))),
+        ],
+      ),
+    );
+    if (value == null) return;
     setState(() {
-      r.paymentHistory.add(paidOn.toIso8601String());
-      r.paidInstallments++;
-      if (r.frequency == 'One Time' || r.isComplete) {
+      r.totalPaidAmount += value;
+      r.currentInstallmentPaid += value;
+      r.paymentHistory.add(
+        '${DateTime.now().toIso8601String()} | ₹${value.toStringAsFixed(2)}');
+      while (r.currentInstallmentPaid >= r.amount &&
+          r.paidInstallments < r.calculatedInstallments) {
+        r.currentInstallmentPaid -= r.amount;
+        r.paidInstallments++;
+        if (r.frequency == 'One Time') {
+          r.paid = true;
+          break;
+        }
+        r.dueDate = nextScheduledDate(
+          r.dueDate, r.frequency, r.monthlyMode, r.weekday, r.monthlyWeek);
+      }
+      if (r.paidInstallments >= r.calculatedInstallments ||
+          (r.endDate != null && r.dueDate.isAfter(r.endDate!))) {
         r.paid = true;
-      } else {
-        r.dueDate = nextDue(r);
-        if (r.endDate != null && r.dueDate.isAfter(r.endDate!)) {
-          r.paid = true;
-        }
-        if (r.totalInstallments != null &&
-            r.paidInstallments >= r.totalInstallments!) {
-          r.paid = true;
-        }
       }
     });
     await save();
@@ -367,7 +447,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final status = r.paid ? tr('അടച്ചു', 'PAID')
         : late ? tr('കുടിശ്ശിക', 'OVERDUE') : tr('അടയ്ക്കാനുണ്ട്', 'PENDING');
     final color = r.paid ? Colors.green : late ? Colors.red : Colors.orange.shade800;
-    final total = r.totalInstallments == null ? '—' : '${r.totalInstallments}';
+    final total = '${r.calculatedInstallments}';
+    final remainingCount = (r.calculatedInstallments - r.paidInstallments).clamp(0, 999999);
+    final balanceAmount = (r.calculatedInstallments * r.amount - r.totalPaidAmount).clamp(0, double.infinity);
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 8),
@@ -379,7 +461,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         subtitle: Text(
           '${r.category} • ${r.dueDate.day}/${r.dueDate.month}/${r.dueDate.year}\n'
           '₹${r.amount.toStringAsFixed(2)} • ${r.frequency} • $status\n'
-          '${tr('അടച്ചത്', 'Paid')}: ${r.paidInstallments}/$total',
+          '${tr('ആകെ അടവുകൾ', 'Total')}: $total • ${tr('അടച്ചത്', 'Paid')}: ${r.paidInstallments}\n'
+          '${tr('ബാക്കി', 'Balance')}: $remainingCount • ₹${balanceAmount.toStringAsFixed(2)}',
           style: TextStyle(color: color, height: 1.4)),
         isThreeLine: true,
         onTap: () => addOrEdit(reminder: r),
@@ -430,12 +513,12 @@ class ReminderForm extends StatefulWidget {
 
 class _ReminderFormState extends State<ReminderForm> {
   final formKey = GlobalKey<FormState>();
-  late TextEditingController title, amount, notes, installments;
+  late TextEditingController title, amount, notes;
   late String category, frequency, monthlyMode, weekday, monthlyWeek;
   late DateTime startDate, dueDate;
   DateTime? endDate;
   bool paid = false;
-  bool useEndDate = false, useInstallments = true;
+  bool useEndDate = false;
 
   bool get ml => widget.malayalam;
   String tr(String a, String b) => ml ? a : b;
@@ -453,8 +536,6 @@ class _ReminderFormState extends State<ReminderForm> {
     title = TextEditingController(text: r?.title ?? '');
     amount = TextEditingController(text: r == null ? '' : r.amount.toString());
     notes = TextEditingController(text: r?.notes ?? '');
-    installments = TextEditingController(
-        text: r?.totalInstallments?.toString() ?? '');
     category = r?.category ?? 'EMI';
     frequency = r?.frequency ?? 'Monthly';
     monthlyMode = r?.monthlyMode ?? 'Date';
@@ -464,13 +545,12 @@ class _ReminderFormState extends State<ReminderForm> {
     dueDate = r?.dueDate ?? DateTime.now();
     endDate = r?.endDate;
     useEndDate = endDate != null;
-    useInstallments = r?.totalInstallments != null || r == null;
     paid = r?.paid ?? false;
   }
 
   @override
   void dispose() {
-    title.dispose(); amount.dispose(); notes.dispose(); installments.dispose();
+    title.dispose(); amount.dispose(); notes.dispose();
     super.dispose();
   }
 
@@ -493,18 +573,17 @@ class _ReminderFormState extends State<ReminderForm> {
 
   void save() {
     if (!formKey.currentState!.validate()) return;
-    final count = useInstallments && installments.text.trim().isNotEmpty
-        ? int.tryParse(installments.text.trim()) : null;
+    final count = frequency == 'One Time' ? 1 : null;
+    if (frequency != 'One Time' && (!useEndDate || endDate == null)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('ആവർത്തിക്കുന്ന അടവിന് അവസാന തീയതി നൽകുക',
+            'Please set an end date for recurring payments'))));
+      return;
+    }
     if (useEndDate && endDate != null && endDate!.isBefore(startDate)) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(tr('അവസാന തീയതി ആരംഭ തീയതിക്ക് ശേഷമായിരിക്കണം',
             'End date must be after start date'))));
-      return;
-    }
-    if (frequency != 'One Time' && !useEndDate && count == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(tr('അവസാന തീയതിയോ അടവുകളുടെ എണ്ണമോ നൽകുക',
-            'Set an end date or installment count'))));
       return;
     }
     final old = widget.reminder;
@@ -520,6 +599,8 @@ class _ReminderFormState extends State<ReminderForm> {
       weekday: weekday, monthlyWeek: monthlyWeek,
       paid: paid, notes: notes.text.trim(),
       paymentHistory: old?.paymentHistory ?? [],
+      currentInstallmentPaid: old?.currentInstallmentPaid ?? 0,
+      totalPaidAmount: old?.totalPaidAmount ?? 0,
     );
     Navigator.pop(context, result);
   }
@@ -617,27 +698,10 @@ class _ReminderFormState extends State<ReminderForm> {
               label: Text(endDate == null
                 ? tr('അവസാന തീയതി തിരഞ്ഞെടുക്കുക', 'Choose end date')
                 : '${tr('അവസാന തീയതി', 'End date')}: ${endDate!.day}/${endDate!.month}/${endDate!.year}')),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(tr('ആകെ അടവുകളുടെ എണ്ണം നൽകുക', 'Set total installments')),
-            value: useInstallments,
-            onChanged: (v) => setState(() => useInstallments = v)),
-          if (useInstallments)
-            TextFormField(controller: installments,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: tr('ആകെ എത്ര അടവുകൾ?', 'Total installments'),
-                border: const OutlineInputBorder()),
-              validator: (v) {
-                if (!useInstallments || (v ?? '').trim().isEmpty) return null;
-                final n = int.tryParse(v!);
-                return n == null || n < 1
-                  ? tr('ശരിയായ എണ്ണം നൽകുക', 'Enter a valid count') : null;
-              }),
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text(tr('അവസാന തീയതിയും ആകെ അടവുകളും രണ്ടും നൽകാം. ഏതെങ്കിലും ഒരു പരിധി ആദ്യം പൂർത്തിയായാൽ ഷെഡ്യൂൾ അവസാനിക്കും.',
-              'You can set both limits. The schedule ends when either limit is reached.'),
+            child: Text(tr('ആകെ അടവുകളുടെ എണ്ണവും ബാക്കി തുകയും തീയതിയും ആവർത്തന രീതിയും അടിസ്ഥാനമാക്കി സ്വയം കണക്കാക്കും.',
+              'Total installments and remaining balance are calculated automatically from the dates and frequency.'),
               style: const TextStyle(color: Colors.black54))),
         ],
         const SizedBox(height: 12),
