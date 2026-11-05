@@ -1,150 +1,359 @@
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  runApp(const KarthikaAI());
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const OrmaApp());
 }
 
-class KarthikaAI extends StatelessWidget {
-  const KarthikaAI({super.key});
+class OrmaApp extends StatelessWidget {
+  const OrmaApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'ORMA',
       debugShowCheckedModeBanner: false,
-      title: 'Karthika AI',
       theme: ThemeData(
         useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF9C426E),
-        scaffoldBackgroundColor: const Color(0xFFFFF8FA),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF8A5A44),
+          brightness: Brightness.light,
+        ),
+        scaffoldBackgroundColor: const Color(0xFFFFFAF6),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFFFFFAF6),
+          surfaceTintColor: Colors.transparent,
+        ),
       ),
-      home: const HomeScreen(),
+      home: const DashboardScreen(),
     );
   }
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class Reminder {
+  final String id;
+  String title;
+  String category;
+  double amount;
+  DateTime dueDate;
+  String notes;
+  bool paid;
 
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  Reminder({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.amount,
+    required this.dueDate,
+    this.notes = '',
+    this.paid = false,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'category': category,
+        'amount': amount,
+        'dueDate': dueDate.toIso8601String(),
+        'notes': notes,
+        'paid': paid,
+      };
+
+  factory Reminder.fromJson(Map<String, dynamic> json) => Reminder(
+        id: json['id'] as String,
+        title: json['title'] as String? ?? '',
+        category: json['category'] as String? ?? 'Other',
+        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+        dueDate: DateTime.tryParse(json['dueDate'] as String? ?? '') ??
+            DateTime.now(),
+        notes: json['notes'] as String? ?? '',
+        paid: json['paid'] as bool? ?? false,
+      );
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  bool malayalam = true;
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  static const String _storageKey = 'orma_reminders_v1';
+  List<Reminder> _reminders = [];
+  bool _loading = true;
+  bool _malayalam = true;
+  String _assistantName = 'കാർത്തിക';
+
+  String tr(String ml, String en) => _malayalam ? ml : en;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadReminders();
+  }
+
+  Future<void> _loadReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_storageKey);
+    if (raw != null) {
+      try {
+        final decoded = jsonDecode(raw) as List<dynamic>;
+        _reminders = decoded
+            .map((item) => Reminder.fromJson(
+                Map<String, dynamic>.from(item as Map)))
+            .toList();
+      } catch (_) {
+        _reminders = [];
+      }
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _saveReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _storageKey,
+      jsonEncode(_reminders.map((item) => item.toJson()).toList()),
+    );
+  }
+
+  DateTime _dateOnly(DateTime date) =>
+      DateTime(date.year, date.month, date.day);
+
+  bool _isOverdue(Reminder item) =>
+      !item.paid && _dateOnly(item.dueDate).isBefore(_dateOnly(DateTime.now()));
+
+  List<Reminder> get _pending =>
+      _reminders.where((item) => !item.paid).toList()
+        ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+
+  double get _monthDue {
+    final now = DateTime.now();
+    return _reminders
+        .where((item) =>
+            !item.paid &&
+            item.dueDate.year == now.year &&
+            item.dueDate.month == now.month)
+        .fold(0, (sum, item) => sum + item.amount);
+  }
+
+  Future<void> _openForm({Reminder? reminder}) async {
+    final result = await Navigator.push<Reminder>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReminderFormScreen(
+          malayalam: _malayalam,
+          reminder: reminder,
+        ),
+      ),
+    );
+
+    if (result == null) return;
+    setState(() {
+      final index = _reminders.indexWhere((item) => item.id == result.id);
+      if (index >= 0) {
+        _reminders[index] = result;
+      } else {
+        _reminders.add(result);
+      }
+    });
+    await _saveReminders();
+  }
+
+  Future<void> _togglePaid(Reminder item) async {
+    setState(() => item.paid = !item.paid);
+    await _saveReminders();
+  }
+
+  Future<void> _delete(Reminder item) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr('റിമൈൻഡർ നീക്കണോ?', 'Delete reminder?')),
+        content: Text(tr('ഈ രേഖ സ്ഥിരമായി നീക്കം ചെയ്യും.',
+            'This reminder will be permanently deleted.')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(tr('വേണ്ട', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(tr('നീക്കുക', 'Delete')),
+          ),
+        ],
+      ),
+    );
+    if (yes == true) {
+      setState(() => _reminders.removeWhere((r) => r.id == item.id));
+      await _saveReminders();
+    }
+  }
+
+  Future<void> _settings() async {
+    final controller = TextEditingController(text: _assistantName);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr('അസിസ്റ്റന്റിന്റെ പേര്', 'Assistant name')),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(
+            labelText: tr('നിങ്ങൾക്ക് ഇഷ്ടമുള്ള പേര്', 'Choose a name'),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(tr('റദ്ദാക്കുക', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: Text(tr('സേവ്', 'Save')),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result.isNotEmpty) {
+      setState(() => _assistantName = result);
+    }
+  }
+
+  String _money(double amount) =>
+      '₹${amount.toStringAsFixed(2)}';
 
   @override
   Widget build(BuildContext context) {
-    final title = malayalam ? 'ഹായ്! ഞാൻ കാർത്തിക' : 'Hi! I am Karthika';
-    final subtitle = malayalam
-        ? 'നിങ്ങളുടെ സ്വന്തം AI Assistant'
-        : 'Your Personal AI Assistant';
-
+    final overdueCount = _pending.where(_isOverdue).length;
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'KARTHIKA AI',
+          'ഓർമ്മ  ORMA',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              setState(() => malayalam = !malayalam);
-            },
-            child: Text(malayalam ? 'EN' : 'മലയാളം'),
+            onPressed: () => setState(() => _malayalam = !_malayalam),
+            child: Text(_malayalam ? 'EN' : 'മലയാളം'),
           ),
-          const SizedBox(width: 10),
+          IconButton(
+            onPressed: _settings,
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: tr('ക്രമീകരണങ്ങൾ', 'Settings'),
+          ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openForm(),
+        icon: const Icon(Icons.add),
+        label: Text(tr('റിമൈൻഡർ ചേർക്കുക', 'Add reminder')),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadReminders,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                children: [
+                  _assistantCard(),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _summaryCard(
+                          tr('ഈ മാസത്തെ അടവ്', 'Due this month'),
+                          _money(_monthDue),
+                          Icons.account_balance_wallet_outlined,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _summaryCard(
+                          tr('കുടിശ്ശിക', 'Overdue'),
+                          '$overdueCount',
+                          Icons.warning_amber_rounded,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 22),
+                  Text(
+                    tr('അടുത്ത അടവുകൾ', 'Upcoming payments'),
+                    style: const TextStyle(
+                        fontSize: 19, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 10),
+                  if (_pending.isEmpty)
+                    _emptyState()
+                  else
+                    ..._pending.map(_reminderCard),
+                  const SizedBox(height: 20),
+                  Text(
+                    tr('എല്ലാ റിമൈൻഡറുകളും', 'All reminders'),
+                    style: const TextStyle(
+                        fontSize: 19, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_reminders.isEmpty)
+                    Text(
+                      tr('ആദ്യത്തെ റിമൈൻഡർ ചേർക്കൂ.',
+                          'Add your first reminder.'),
+                      style: const TextStyle(color: Colors.black54),
+                    )
+                  else
+                    ..._reminders.where((item) => item.paid).map(_reminderCard),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _assistantCard() {
+    return Card(
+      elevation: 0,
+      color: const Color(0xFFF1E5DA),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
           children: [
-            const SizedBox(height: 20),
             ClipRRect(
-              borderRadius: BorderRadius.circular(25),
+              borderRadius: BorderRadius.circular(18),
               child: Image.asset(
                 'assets/karthika.jpg',
-                width: 230,
-                height: 260,
+                width: 82,
+                height: 96,
                 fit: BoxFit.cover,
-             ),
-           ),
-            const SizedBox(height: 24),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 27,
-                fontWeight: FontWeight.bold,
+                errorBuilder: (_, __, ___) => Container(
+                  width: 82,
+                  height: 96,
+                  color: Colors.white,
+                  child: const Icon(Icons.person, size: 42),
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              style: const TextStyle(
-                fontSize: 16,
-                color: Colors.black54,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    tr('നമസ്കാരം! ഞാൻ $_assistantName',
+                        'Hello! I am $_assistantName'),
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    tr('നിങ്ങളുടെ പ്രധാനപ്പെട്ട കാര്യങ്ങൾ ഇനി മറക്കേണ്ട.',
+                        'Let me help you remember what matters.'),
+                    style: const TextStyle(height: 1.35),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 30),
-            _sectionTitle(
-              malayalam ? 'എന്നോട് സംസാരിക്കൂ' : 'Talk with me',
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: _actionCard(
-                    Icons.chat_bubble_outline,
-                    'Chat',
-                    malayalam ? 'ടൈപ്പ് ചെയ്യുക' : 'Type a message',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ChatScreen(malayalam: malayalam),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _actionCard(
-                    Icons.mic_none,
-                    malayalam ? 'Voice' : 'Voice',
-                    malayalam ? 'സംസാരിക്കുക' : 'Speak with me',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 30),
-            _sectionTitle(
-              malayalam ? 'നിങ്ങളുടെ അസിസ്റ്റന്റ്' : 'Your Assistant',
-            ),
-            const SizedBox(height: 14),
-            _menuTile(
-              Icons.person_outline,
-              malayalam ? 'Personal Assistant' : 'Personal Assistant',
-            ),
-            _menuTile(
-              Icons.business_center_outlined,
-              malayalam ? 'Business Assistant' : 'Business Assistant',
-            ),
-            _menuTile(
-              Icons.video_camera_front_outlined,
-              malayalam ? 'AI Video Presenter' : 'AI Video Presenter',
-            ),
-            _menuTile(
-              Icons.settings_outlined,
-              malayalam ? 'Settings' : 'Settings',
-            ),
-            const SizedBox(height: 25),
-            const Text(
-              'KARTHIKA AI • Version 1.0',
-              style: TextStyle(color: Colors.black45),
             ),
           ],
         ),
@@ -152,176 +361,272 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _sectionTitle(String text) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontSize: 19,
-          fontWeight: FontWeight.bold,
+  Widget _summaryCard(String title, String value, IconData icon) {
+    return Card(
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(height: 9),
+            Text(title, style: const TextStyle(color: Colors.black54)),
+            const SizedBox(height: 4),
+            Text(value,
+                style:
+                    const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+          ],
         ),
       ),
     );
   }
 
-  Widget _actionCard(
-    IconData icon,
-    String title,
-    String subtitle, {
-    VoidCallback? onTap,
-  }) {
+  Widget _emptyState() {
     return Card(
-      elevation: 1,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              Icon(icon, size: 35, color: const Color(0xFF9C426E)),
-              const SizedBox(height: 10),
-              Text(title, style: const TextStyle(
-                fontWeight: FontWeight.bold,
-              )),
-              const SizedBox(height: 5),
-              Text(
-                subtitle,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12),
-              ),
-            ],
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          children: [
+            const Icon(Icons.event_available, size: 42, color: Colors.green),
+            const SizedBox(height: 8),
+            Text(tr('ഇപ്പോൾ അടവുകൾ ഒന്നുമില്ല',
+                'No upcoming payments yet')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _reminderCard(Reminder item) {
+    final overdue = _isOverdue(item);
+    final status = item.paid
+        ? tr('അടച്ചു', 'PAID')
+        : overdue
+            ? tr('കുടിശ്ശിക', 'OVERDUE')
+            : tr('അടയ്ക്കാനുണ്ട്', 'PENDING');
+    final color = item.paid
+        ? Colors.green
+        : overdue
+            ? Colors.red
+            : Colors.orange.shade800;
+
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 9),
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(.12),
+          child: Icon(
+            item.paid ? Icons.check : Icons.event_note,
+            color: color,
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _menuTile(IconData icon, String title) {
-    return Card(
-      child: ListTile(
-        leading: Icon(icon, color: const Color(0xFF9C426E)),
-        title: Text(title),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        title: Text(item.title,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(
+          '${item.category} • ${item.dueDate.day}/${item.dueDate.month}/${item.dueDate.year}\n$status',
+          style: TextStyle(color: color, height: 1.5),
+        ),
+        trailing: PopupMenuButton<String>(
+          onSelected: (value) {
+            if (value == 'edit') _openForm(reminder: item);
+            if (value == 'paid') _togglePaid(item);
+            if (value == 'delete') _delete(item);
+          },
+          itemBuilder: (_) => [
+            if (!item.paid)
+              PopupMenuItem(
+                value: 'paid',
+                child: Text(tr('അടച്ചതായി രേഖപ്പെടുത്തുക', 'Mark as paid')),
+              ),
+            PopupMenuItem(
+                value: 'edit', child: Text(tr('തിരുത്തുക', 'Edit'))),
+            PopupMenuItem(
+                value: 'delete', child: Text(tr('നീക്കം ചെയ്യുക', 'Delete'))),
+          ],
+        ),
+        isThreeLine: true,
+        onTap: () => _openForm(reminder: item),
       ),
     );
   }
 }
 
-
-class ChatScreen extends StatefulWidget {
+class ReminderFormScreen extends StatefulWidget {
   final bool malayalam;
+  final Reminder? reminder;
 
-  const ChatScreen({super.key, required this.malayalam});
+  const ReminderFormScreen({
+    super.key,
+    required this.malayalam,
+    this.reminder,
+  });
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  State<ReminderFormScreen> createState() => _ReminderFormScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
-  final TextEditingController _messageController = TextEditingController();
-  final List<Map<String, String>> _messages = [];
+class _ReminderFormScreenState extends State<ReminderFormScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _title;
+  late final TextEditingController _amount;
+  late final TextEditingController _notes;
+  late String _category;
+  late DateTime _date;
+  late bool _paid;
+
+  bool get ml => widget.malayalam;
+  String tr(String a, String b) => ml ? a : b;
+
+  final List<String> _categories = [
+    'EMI',
+    'Loan',
+    'Chitty',
+    'Electricity',
+    'Water',
+    'Insurance',
+    'Rent',
+    'Other',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final item = widget.reminder;
+    _title = TextEditingController(text: item?.title ?? '');
+    _amount = TextEditingController(
+        text: item == null ? '' : item.amount.toStringAsFixed(2));
+    _notes = TextEditingController(text: item?.notes ?? '');
+    _category = item?.category ?? 'EMI';
+    _date = item?.dueDate ?? DateTime.now();
+    _paid = item?.paid ?? false;
+  }
 
   @override
   void dispose() {
-    _messageController.dispose();
+    _title.dispose();
+    _amount.dispose();
+    _notes.dispose();
     super.dispose();
   }
 
-  void _sendMessage() {
-    final message = _messageController.text.trim();
-    if (message.isEmpty) return;
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked != null) setState(() => _date = picked);
+  }
 
-    setState(() {
-      _messages.add({'role': 'user', 'text': message});
-      _messageController.clear();
-    });
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    final item = Reminder(
+      id: widget.reminder?.id ??
+          DateTime.now().microsecondsSinceEpoch.toString(),
+      title: _title.text.trim(),
+      category: _category,
+      amount: double.parse(_amount.text.trim()),
+      dueDate: _date,
+      notes: _notes.text.trim(),
+      paid: _paid,
+    );
+    Navigator.pop(context, item);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Karthika Chat'),
-        backgroundColor: const Color(0xFFFFF8FA),
+        title: Text(tr('റിമൈൻഡർ', 'Reminder')),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _messages.isEmpty
-                ? Center(
-                    child: Text(
-                      widget.malayalam
-                          ? 'ഹായ്! ഞാൻ കാർത്തിക. എന്നോട് സംസാരിക്കൂ.'
-                          : 'Hi! I am Karthika. Start a conversation.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 18),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      final item = _messages[index];
-                      final isUser = item['role'] == 'user';
-                      return Align(
-                        alignment: isUser
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 6),
-                          padding: const EdgeInsets.all(12),
-                          constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width * 0.78,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isUser
-                                ? const Color(0xFFEFD7E2)
-                                : Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Text(item['text'] ?? ''),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _sendMessage(),
-                      decoration: InputDecoration(
-                        hintText: widget.malayalam
-                            ? 'സന്ദേശം എഴുതുക...'
-                            : 'Type a message...',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 12,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: _sendMessage,
-                    icon: const Icon(Icons.send),
-                    color: const Color(0xFF9C426E),
-                  ),
-                ],
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            TextFormField(
+              controller: _title,
+              decoration: InputDecoration(
+                labelText: tr('പേര് / വിശദാംശം', 'Name / Description'),
+                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.edit_outlined),
+              ),
+              validator: (value) => value == null || value.trim().isEmpty
+                  ? tr('പേര് നൽകുക', 'Enter a name')
+                  : null,
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              value: _category,
+              decoration: InputDecoration(
+                labelText: tr('വിഭാഗം', 'Category'),
+                border: const OutlineInputBorder(),
+              ),
+              items: _categories
+                  .map((category) => DropdownMenuItem(
+                        value: category,
+                        child: Text(category),
+                      ))
+                  .toList(),
+              onChanged: (value) =>
+                  setState(() => _category = value ?? 'Other'),
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _amount,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: tr('തുക (₹)', 'Amount (₹)'),
+                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.currency_rupee),
+              ),
+              validator: (value) {
+                final amount = double.tryParse(value ?? '');
+                if (amount == null || amount < 0) {
+                  return tr('ശരിയായ തുക നൽകുക', 'Enter a valid amount');
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: _pickDate,
+              icon: const Icon(Icons.calendar_month),
+              label: Text(
+                '${tr('അടയ്ക്കേണ്ട തീയതി', 'Due date')}: ${_date.day}/${_date.month}/${_date.year}',
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _notes,
+              maxLines: 3,
+              decoration: InputDecoration(
+                labelText: tr('കുറിപ്പുകൾ (ഐച്ഛികം)', 'Notes (optional)'),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr('ഇതിനകം അടച്ചു', 'Already paid')),
+              value: _paid,
+              onChanged: (value) => setState(() => _paid = value),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: _save,
+              icon: const Icon(Icons.save_outlined),
+              label: Text(tr('സേവ് ചെയ്യുക', 'Save reminder')),
+            ),
+          ],
+        ),
       ),
     );
   }
