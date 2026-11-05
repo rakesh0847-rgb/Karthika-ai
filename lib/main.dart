@@ -62,15 +62,15 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             const SizedBox(height: 20),
-            CircleAvatar(
-              radius: 85,
-              backgroundColor: const Color(0xFFF1DCE6),
-              child: const Icon(
-                Icons.face_3_rounded,
-                size: 100,
-                color: Color(0xFF9C426E),
-              ),
-            ),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(25),
+              child: Image.asset(
+                'assets/karthika.jpg',
+                width: 230,
+                height: 260,
+                fit: BoxFit.cover,
+             ),
+           ),
             const SizedBox(height: 24),
             Text(
               title,
