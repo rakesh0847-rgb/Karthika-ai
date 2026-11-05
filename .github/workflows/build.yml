@@ -63,31 +63,44 @@ jobs:
 
           gradle = Path("android/app/build.gradle.kts")
           if not gradle.exists():
-              raise SystemExit("Android Gradle Kotlin file not found")
+              raise SystemExit("Android app/build.gradle.kts not found")
 
           g = gradle.read_text()
 
-          if "isCoreLibraryDesugaringEnabled" in g:
+          if re.search(r"isCoreLibraryDesugaringEnabled\s*=", g):
               g = re.sub(
                   r"isCoreLibraryDesugaringEnabled\s*=\s*(true|false)",
                   "isCoreLibraryDesugaringEnabled = true",
-                  g
+                  g,
+                  count=1
               )
           else:
-              g = g.replace(
-                  "compileOptions {",
-                  "compileOptions {\n        isCoreLibraryDesugaringEnabled = true",
-                  1
+              g = re.sub(
+                  r"(?m)^(\s*)compileOptions\s*\{",
+                  r"\1compileOptions {\n\1    isCoreLibraryDesugaringEnabled = true",
+                  g,
+                  count=1
               )
 
-          if "coreLibraryDesugaring(" not in g:
-              g = g.replace(
-                  "dependencies {",
-                  'dependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")',
-                  1
+          if "desugar_jdk_libs" not in g:
+              match = re.search(r"(?m)^(\s*)dependencies\s*\{", g)
+              if not match:
+                  raise SystemExit("Could not find dependencies block in app/build.gradle.kts")
+              indent = match.group(1) + "    "
+              insert_at = match.end()
+              g = (
+                  g[:insert_at]
+                  + '\n' + indent + 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+                  + g[insert_at:]
               )
+
+          if "isCoreLibraryDesugaringEnabled = true" not in g:
+              raise SystemExit("Desugaring is not enabled")
+          if "desugar_jdk_libs" not in g:
+              raise SystemExit("Desugaring dependency was not added")
 
           gradle.write_text(g)
+          print("Android notification configuration updated.")
           PY
 
       - name: Get Dependencies
