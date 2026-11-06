@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -501,6 +503,117 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+
+  Future<void> backupData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final paymentRaw = prefs.getString(storageKey) ??
+          prefs.getString('orma_reminders_v1') ?? '[]';
+      final personalRaw =
+          prefs.getString('orma_personal_reminders_v1') ?? '[]';
+      final paymentData = jsonDecode(paymentRaw);
+      final personalData = jsonDecode(personalRaw);
+      if (paymentData is! List || personalData is! List) {
+        throw const FormatException('Invalid ORMA data');
+      }
+      final backup = <String, dynamic>{
+        'app': 'ORMA',
+        'backupVersion': 1,
+        'createdAt': DateTime.now().toIso8601String(),
+        'paymentReminders': paymentData,
+        'personalReminders': personalData,
+      };
+      final bytes = Uint8List.fromList(utf8.encode(
+          const JsonEncoder.withIndent('  ').convert(backup)));
+      final fileName =
+          'ORMA_Backup_${DateTime.now().year}_${DateTime.now().month.toString().padLeft(2, '0')}_${DateTime.now().day.toString().padLeft(2, '0')}.json';
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: tr('ബാക്കപ്പ് സേവ് ചെയ്യുക', 'Save ORMA backup'),
+        fileName: fileName,
+        bytes: bytes,
+      );
+      if (savedPath == null) return;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('ബാക്കപ്പ് ഫയൽ സേവ് ചെയ്തു', 'Backup file saved')),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${tr('ബാക്കപ്പ് സൃഷ്ടിക്കാൻ കഴിഞ്ഞില്ല', 'Could not create backup')}: $e'),
+      ));
+    }
+  }
+
+  Future<void> restoreData() async {
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+      if (picked == null || picked.files.isEmpty) return;
+      final bytes = picked.files.single.bytes;
+      if (bytes == null) throw const FormatException('Cannot read backup file');
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map ||
+          decoded['app'] != 'ORMA' ||
+          decoded['paymentReminders'] is! List ||
+          decoded['personalReminders'] is! List) {
+        throw const FormatException('Invalid ORMA backup file');
+      }
+      final payments = (decoded['paymentReminders'] as List)
+          .map((e) => Reminder.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      final personal = (decoded['personalReminders'] as List)
+          .map((e) => PersonalReminder.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      if (!mounted) return;
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(tr('ബാക്കപ്പ് പുനഃസ്ഥാപിക്കണോ?', 'Restore backup?')),
+          content: Text(tr(
+            'നിലവിലുള്ള Payment, Personal Reminder വിവരങ്ങൾ ബാക്കപ്പിലെ വിവരങ്ങളാൽ മാറ്റിസ്ഥാപിക്കും. തുടരട്ടേ?',
+            'This will replace the current payment and personal reminders with the selected backup. Continue?')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(tr('റദ്ദാക്കുക', 'Cancel'))),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(tr('Restore ചെയ്യുക', 'Restore'))),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(storageKey,
+          jsonEncode(payments.map((e) => e.toJson()).toList()));
+      await prefs.setString('orma_personal_reminders_v1',
+          jsonEncode(personal.map((e) => e.toJson()).toList()));
+      if (!mounted) return;
+      setState(() => reminders = payments);
+      await OrmaNotifications.instance.rescheduleAll(
+          reminders, malayalam: malayalam);
+      for (final item in personal) {
+        await OrmaNotifications.instance.schedulePersonal(
+            item, malayalam: malayalam);
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('ബാക്കപ്പ് വിജയകരമായി പുനഃസ്ഥാപിച്ചു',
+            'Backup restored successfully')),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${tr('ബാക്കപ്പ് ഫയൽ വായിക്കാൻ കഴിഞ്ഞില്ല',
+            'Could not read backup file')}: $e'),
+      ));
+    }
+  }
+
   Future<void> settings() async {
     final c = TextEditingController(text: assistantName);
     final name = await showDialog<String>(
@@ -540,6 +653,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 content: Text(tr('അറിയിപ്പ് അനുമതി അഭ്യർത്ഥിച്ചു', 'Notification permission requested'))));
             },
             icon: const Icon(Icons.notifications_active_outlined)),
+          PopupMenuButton<String>(
+            tooltip: tr('ബാക്കപ്പ് / റിസ്റ്റോർ', 'Backup / Restore'),
+            icon: const Icon(Icons.backup_outlined),
+            onSelected: (value) {
+              if (value == 'backup') backupData();
+              if (value == 'restore') restoreData();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'backup',
+                child: Text(tr('ബാക്കപ്പ് സൃഷ്ടിക്കുക', 'Create backup'))),
+              PopupMenuItem(value: 'restore',
+                child: Text(tr('ബാക്കപ്പിൽ നിന്ന് Restore', 'Restore from backup'))),
+            ],
+          ),
           IconButton(onPressed: settings, icon: const Icon(Icons.settings_outlined)),
         ],
       ),
