@@ -1,5 +1,5 @@
 name: karthika_ai
-description: Karthika Personal Reminder Assistant
+description: ORMA Personal Reminder Assistant
 publish_to: 'none'
 
 version: 1.1.0+3
@@ -20,11 +20,13 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
   assets:
     - assets/karthika.jpg
+    - assets/orma_logo.png
     - assets/emi.jpg.PNG
     - assets/loan.jpg.PNG
     - assets/chitty.jpg.PNG
@@ -33,3 +35,10 @@ flutter:
     - assets/insurance.jpg.PNG
     - assets/rent.jpg.PNG
     - assets/other.jpg.PNG
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/orma_logo.png
+  adaptive_icon_background: "#FFFFFAF6"
+  adaptive_icon_foreground: assets/orma_logo.png
