@@ -1,5 +1,5 @@
 name: karthika_ai
-description: ORMA Personal Reminder Assistant
+description: ORMA - ഓർമ Personal Reminder Assistant
 publish_to: 'none'
 
 version: 1.1.0+3
@@ -21,6 +21,7 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.6
 
 flutter:
   uses-material-design: true
@@ -40,5 +41,14 @@ flutter_launcher_icons:
   android: true
   ios: false
   image_path: assets/orma_logo.png
-  adaptive_icon_background: "#FFFFFAF6"
+  adaptive_icon_background: '#FFF8F0'
   adaptive_icon_foreground: assets/orma_logo.png
+
+flutter_native_splash:
+  color: '#FFF8F0'
+  image: assets/orma_logo.png
+  android: true
+  ios: false
+  android_12:
+    color: '#FFF8F0'
+    image: assets/orma_logo.png
