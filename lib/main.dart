@@ -531,6 +531,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(height: 14),
                 Row(children: [
+                  Expanded(child: _quickAccess(
+                    tr('കലണ്ടർ', 'Calendar'), Icons.calendar_month_rounded,
+                    const Color(0xFFEAF2FF), const Color(0xFF3269B5),
+                    () => Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => OrmaCalendarScreen(
+                        reminders: List<Reminder>.from(reminders),
+                        malayalam: malayalam))),
+                  )),
+                  const SizedBox(width: 10),
+                  Expanded(child: _quickAccess(
+                    tr('Personal Reminder', 'Personal Reminder'), Icons.notifications_active_rounded,
+                    const Color(0xFFFFF0E8), const Color(0xFFC66A38),
+                    () => Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => PersonalReminderScreen(malayalam: malayalam))),
+                  )),
+                ]),
+                const SizedBox(height: 14),
+                Row(children: [
                   Expanded(child: _summary(tr('ഈ മാസത്തെ അടവ്', 'Due this month'),
                       '₹${monthDue.toStringAsFixed(2)}', Icons.wallet_outlined)),
                   const SizedBox(width: 10),
@@ -556,6 +574,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
     );
   }
+
+  Widget _quickAccess(String title, IconData icon, Color bg, Color fg,
+      VoidCallback onTap) => Card(
+    elevation: 0,
+    color: bg,
+    child: InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 10),
+        child: Column(children: [
+          Icon(icon, color: fg, size: 32),
+          const SizedBox(height: 8),
+          Text(title, textAlign: TextAlign.center,
+            style: TextStyle(color: fg, fontWeight: FontWeight.w700)),
+        ]),
+      ),
+    ),
+  );
 
   Widget _summary(String title, String value, IconData icon) => Card(
     elevation: 0,
@@ -628,6 +665,174 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
     );
+  }
+}
+
+
+class PersonalReminder {
+  final String id;
+  final String title;
+  final String notes;
+  final DateTime date;
+  const PersonalReminder({required this.id, required this.title,
+    required this.notes, required this.date});
+  Map<String, dynamic> toJson() => {'id': id, 'title': title,
+    'notes': notes, 'date': date.toIso8601String()};
+  factory PersonalReminder.fromJson(Map<String, dynamic> j) => PersonalReminder(
+    id: j['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+    title: j['title']?.toString() ?? '', notes: j['notes']?.toString() ?? '',
+    date: DateTime.tryParse(j['date']?.toString() ?? '') ?? DateTime.now());
+}
+
+class PersonalReminderScreen extends StatefulWidget {
+  final bool malayalam;
+  const PersonalReminderScreen({super.key, required this.malayalam});
+  @override
+  State<PersonalReminderScreen> createState() => _PersonalReminderScreenState();
+}
+
+class _PersonalReminderScreenState extends State<PersonalReminderScreen> {
+  static const key = 'orma_personal_reminders_v1';
+  List<PersonalReminder> items = [];
+  bool loading = true;
+  bool get ml => widget.malayalam;
+  String tr(String a, String b) => ml ? a : b;
+
+  @override
+  void initState() { super.initState(); load(); }
+  Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(key);
+    if (raw != null) {
+      try { items = (jsonDecode(raw) as List).map((e) =>
+        PersonalReminder.fromJson(Map<String, dynamic>.from(e))).toList(); }
+      catch (_) { items = []; }
+    }
+    if (mounted) setState(() => loading = false);
+  }
+  Future<void> persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, jsonEncode(items.map((e) => e.toJson()).toList()));
+  }
+  Future<void> editItem({PersonalReminder? old}) async {
+    final title = TextEditingController(text: old?.title ?? '');
+    final notes = TextEditingController(text: old?.notes ?? '');
+    DateTime date = old?.date ?? DateTime.now();
+    final result = await showDialog<PersonalReminder>(context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setDialog) => AlertDialog(
+        title: Text(old == null ? tr('പുതിയ ഓർമ്മപ്പെടുത്തൽ', 'New personal reminder') : tr('തിരുത്തുക', 'Edit reminder')),
+        content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: title, decoration: InputDecoration(labelText: tr('എന്താണ് ഓർക്കേണ്ടത്?', 'What should I remember?'))),
+          const SizedBox(height: 10),
+          TextField(controller: notes, maxLines: 2, decoration: InputDecoration(labelText: tr('കുറിപ്പുകൾ (ഐച്ഛികം)', 'Notes (optional)'))),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(onPressed: () async {
+            final d = await showDatePicker(context: ctx, initialDate: date,
+              firstDate: DateTime(2020), lastDate: DateTime(2100));
+            if (d != null) setDialog(() => date = d);
+          }, icon: const Icon(Icons.calendar_today),
+            label: Text('${date.day}/${date.month}/${date.year}')),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('റദ്ദാക്കുക', 'Cancel'))),
+          FilledButton(onPressed: () {
+            if (title.text.trim().isEmpty) return;
+            Navigator.pop(ctx, PersonalReminder(id: old?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+              title: title.text.trim(), notes: notes.text.trim(), date: date));
+          }, child: Text(tr('സേവ്', 'Save'))),
+        ],
+      )));
+    title.dispose(); notes.dispose();
+    if (result == null) return;
+    setState(() {
+      final i = items.indexWhere((e) => e.id == result.id);
+      if (i < 0) items.add(result); else items[i] = result;
+      items.sort((a,b) => a.date.compareTo(b.date));
+    });
+    await persist();
+  }
+  Future<void> remove(PersonalReminder item) async {
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(tr('നീക്കം ചെയ്യണോ?', 'Delete reminder?')),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('വേണ്ട', 'Cancel'))),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('നീക്കം ചെയ്യുക', 'Delete')))]));
+    if (ok == true) { setState(() => items.removeWhere((e) => e.id == item.id)); await persist(); }
+  }
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: Text(tr('Personal Reminder', 'Personal Reminder'))),
+    floatingActionButton: FloatingActionButton.extended(onPressed: () => editItem(),
+      icon: const Icon(Icons.add), label: Text(tr('ചേർക്കുക', 'Add reminder'))),
+    body: loading ? const Center(child: CircularProgressIndicator()) : items.isEmpty
+      ? Center(child: Text(tr('ഇതുവരെ ഓർമ്മപ്പെടുത്തലുകളില്ല', 'No personal reminders yet')))
+      : ListView(padding: const EdgeInsets.all(16), children: items.map((e) => Card(
+        child: ListTile(leading: const Icon(Icons.notifications_active_outlined),
+          title: Text(e.title), subtitle: Text('${e.date.day}/${e.date.month}/${e.date.year}${e.notes.isEmpty ? '' : '\n${e.notes}'}'),
+          onTap: () => editItem(old: e), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => remove(e))))).toList()),
+  );
+}
+
+class OrmaCalendarScreen extends StatefulWidget {
+  final List<Reminder> reminders;
+  final bool malayalam;
+  const OrmaCalendarScreen({super.key, required this.reminders, required this.malayalam});
+  @override
+  State<OrmaCalendarScreen> createState() => _OrmaCalendarScreenState();
+}
+
+class _OrmaCalendarScreenState extends State<OrmaCalendarScreen> {
+  DateTime month = DateTime(DateTime.now().year, DateTime.now().month);
+  DateTime selected = DateTime.now();
+  List<PersonalReminder> personal = [];
+  bool get ml => widget.malayalam;
+  String tr(String a, String b) => ml ? a : b;
+  bool same(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+  @override
+  void initState() { super.initState(); loadPersonal(); }
+  Future<void> loadPersonal() async {
+    final p = await SharedPreferences.getInstance(); final raw = p.getString('orma_personal_reminders_v1');
+    if (raw != null) { try { personal = (jsonDecode(raw) as List).map((e) => PersonalReminder.fromJson(Map<String,dynamic>.from(e))).toList(); } catch (_) {} }
+    if (mounted) setState(() {});
+  }
+  @override
+  Widget build(BuildContext context) {
+    final first = DateTime(month.year, month.month, 1);
+    final start = first.subtract(Duration(days: first.weekday - 1));
+    final cells = List.generate(42, (i) => start.add(Duration(days: i)));
+    final due = widget.reminders.where((r) => !r.paid && same(r.dueDate, selected)).toList();
+    final own = personal.where((r) => same(r.date, selected)).toList();
+    final weekdays = ml ? ['തിങ്കൾ','ചൊവ്വ','ബുധൻ','വ്യാഴം','വെള്ളി','ശനി','ഞായർ'] : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    return Scaffold(appBar: AppBar(title: Text(tr('കലണ്ടർ', 'Calendar'))),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          IconButton(onPressed: () => setState(() { month = DateTime(month.year, month.month-1); }), icon: const Icon(Icons.chevron_left)),
+          Text('${month.month}/${month.year}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          IconButton(onPressed: () => setState(() { month = DateTime(month.year, month.month+1); }), icon: const Icon(Icons.chevron_right)),
+        ]),
+        Row(children: weekdays.map((d) => Expanded(child: Center(child: Text(d, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold))))).toList()),
+        const SizedBox(height: 8),
+        GridView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+          itemCount: 42, gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 1.15),
+          itemBuilder: (ctx, i) {
+            final d = cells[i]; final inMonth = d.month == month.month;
+            final hasDue = widget.reminders.any((r) => !r.paid && same(r.dueDate,d)) || personal.any((r) => same(r.date,d));
+            return InkWell(onTap: () => setState(() => selected = d), child: Container(
+              margin: const EdgeInsets.all(2), decoration: BoxDecoration(
+                color: same(d, selected) ? Theme.of(context).colorScheme.primaryContainer : null,
+                borderRadius: BorderRadius.circular(10)),
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Text('${d.day}', style: TextStyle(color: inMonth ? null : Colors.black26, fontWeight: same(d,selected) ? FontWeight.bold : FontWeight.normal)),
+                if (hasDue) Container(width: 5, height: 5, decoration: const BoxDecoration(color: Colors.deepOrange, shape: BoxShape.circle)),
+              ]),
+            ));
+          }),
+        const Divider(height: 24),
+        Text('${tr('തിരഞ്ഞെടുത്ത തീയതി', 'Selected date')}: ${selected.day}/${selected.month}/${selected.year}', style: const TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        if (due.isEmpty && own.isEmpty) Text(tr('ഈ തീയതിയിൽ റിമൈൻഡറുകളില്ല', 'No reminders on this date')),
+        ...due.map((r) => ListTile(leading: const Icon(Icons.payments_outlined), title: Text(r.title), subtitle: Text('${r.category} • ₹${r.amount.toStringAsFixed(2)}'))),
+        ...own.map((r) => ListTile(leading: const Icon(Icons.notifications_active_outlined), title: Text(r.title), subtitle: Text(r.notes))),
+      ]));
   }
 }
 
