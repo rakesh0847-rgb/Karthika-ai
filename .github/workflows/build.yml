@@ -1,4 +1,4 @@
-name: Karthika AI Build
+name: ORMA Build
 
 on:
   push:
@@ -24,6 +24,11 @@ jobs:
 
       - name: Create Flutter Platforms
         run: flutter create --platforms=android,web .
+
+      - name: Set Android App Name
+        run: |
+          sed -i 's/android:label="karthika_ai"/android:label="ORMA (ഓർമ)"/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/android:label="Karthika AI"/android:label="ORMA (ഓർമ)"/' android/app/src/main/AndroidManifest.xml
 
       - name: Configure Android local notifications
         shell: bash
@@ -84,16 +89,16 @@ jobs:
 
           if "desugar_jdk_libs" not in g:
               match = re.search(r"(?m)^(\s*)dependencies\s*\{", g)
-          if match:
-              indent = match.group(1) + "    "
-              insert_at = match.end()
-              g = (
-                   g[:insert_at]
-                   + '\n' + indent + 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
-                   + g[insert_at:]
-              )
-          else:
-              g += '\n\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+              if match:
+                  indent = match.group(1) + "    "
+                  insert_at = match.end()
+                  g = (
+                      g[:insert_at]
+                      + '\n' + indent + 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+                      + g[insert_at:]
+                  )
+              else:
+                  g += '\n\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
 
           if "isCoreLibraryDesugaringEnabled = true" not in g:
               raise SystemExit("Desugaring is not enabled")
@@ -106,6 +111,12 @@ jobs:
 
       - name: Get Dependencies
         run: flutter pub get
+
+      - name: Generate App Icon
+        run: dart run flutter_launcher_icons
+
+      - name: Generate Splash Screen
+        run: dart run flutter_native_splash:create
 
       - name: Build Android APK
         run: flutter build apk --release
