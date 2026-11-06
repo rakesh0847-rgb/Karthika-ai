@@ -297,6 +297,20 @@ DateTime nextScheduledDate(DateTime from, String frequency,
   }
 }
 
+String _categoryImagePath(String category) {
+  const paths = {
+    'EMI': 'assets/emi.jpg.PNG',
+    'Loan': 'assets/loan.jpg.PNG',
+    'Chitty': 'assets/chitty.jpg.PNG',
+    'Electricity': 'assets/electricity.jpg.PNG',
+    'Water': 'assets/water.jpg.PNG',
+    'Insurance': 'assets/insurance.jpg.PNG',
+    'Rent': 'assets/rent.jpg.PNG',
+    'Other': 'assets/other.jpg.PNG',
+  };
+  return paths[category] ?? 'assets/other.jpg.PNG';
+}
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
   @override
@@ -660,9 +674,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color.withOpacity(.12),
-          child: Icon(r.paid ? Icons.check : Icons.event_note, color: color)),
+        leading: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Image.asset(
+            _categoryImagePath(r.category),
+            width: 54,
+            height: 54,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => CircleAvatar(
+              backgroundColor: color.withOpacity(.12),
+              child: Icon(r.paid ? Icons.check : Icons.event_note, color: color),
+            ),
+          ),
+        ),
         title: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text(
           '${r.category} • ${r.dueDate.day}/${r.dueDate.month}/${r.dueDate.year}\n'
