@@ -54,6 +54,43 @@ class OrmaNotifications {
     return ((hash * 10) + suffix) & 0x7fffffff;
   }
 
+
+  int _personalId(String id) => _stableId('personal:$id', 8);
+
+  Future<void> schedulePersonal(PersonalReminder reminder,
+      {required bool malayalam}) async {
+    await initialize();
+    final id = _personalId(reminder.id);
+    await plugin.cancel(id: id);
+    final notifyAt = reminder.date.subtract(
+      Duration(minutes: reminder.remindBeforeMinutes));
+    if (!notifyAt.isAfter(tz.TZDateTime.now(tz.local))) return;
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'orma_personal_reminders',
+        'ORMA Personal Reminders',
+        channelDescription: 'Personal reminder alerts',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(),
+    );
+    await plugin.zonedSchedule(
+      id: id,
+      title: malayalam ? 'ORMA – വ്യക്തിഗത ഓർമ്മപ്പെടുത്തൽ' : 'ORMA – Personal Reminder',
+      body: reminder.title,
+      scheduledDate: tz.TZDateTime.from(notifyAt, tz.local),
+      notificationDetails: details,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      payload: 'personal:${reminder.id}',
+    );
+  }
+
+  Future<void> cancelPersonal(String id) async {
+    await initialize();
+    await plugin.cancel(id: _personalId(id));
+  }
+
   Future<void> scheduleFor(Reminder reminder, {required bool malayalam}) async {
     await initialize();
     final base = reminder.id;
@@ -110,7 +147,8 @@ class OrmaNotifications {
   Future<void> rescheduleAll(List<Reminder> reminders,
       {required bool malayalam}) async {
     await initialize();
-    await plugin.cancelAll();
+    // Cancel/reschedule payment reminders individually. Do not use cancelAll(),
+    // because that would also erase separately scheduled Personal Reminders.
     for (final reminder in reminders) {
       await scheduleFor(reminder, malayalam: malayalam);
     }
@@ -310,17 +348,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       .fold(0, (s, r) => s + r.amount);
   }
 
-  Future<void> addOrEdit({Reminder? reminder}) async {
+  Future<Reminder?> addOrEdit({Reminder? reminder, DateTime? initialDueDate}) async {
     final result = await Navigator.push<Reminder>(
       context,
       MaterialPageRoute(
         builder: (_) => ReminderForm(
           malayalam: malayalam,
           reminder: reminder,
+          initialDueDate: initialDueDate,
         ),
       ),
     );
-    if (result == null) return;
+    if (result == null) return null;
     setState(() {
       final i = reminders.indexWhere((r) => r.id == result.id);
       if (i < 0) {
@@ -331,6 +370,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
     await save();
     await OrmaNotifications.instance.rescheduleAll(reminders, malayalam: malayalam);
+    return result;
   }
 
   DateTime nextDue(Reminder r) {
@@ -537,7 +577,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     () => Navigator.push(context, MaterialPageRoute(
                       builder: (_) => OrmaCalendarScreen(
                         reminders: List<Reminder>.from(reminders),
-                        malayalam: malayalam))),
+                        malayalam: malayalam,
+                        onAddPaymentReminder: addOrEdit))),
                   )),
                   const SizedBox(width: 10),
                   Expanded(child: _quickAccess(
@@ -674,19 +715,23 @@ class PersonalReminder {
   final String title;
   final String notes;
   final DateTime date;
+  final int remindBeforeMinutes;
   const PersonalReminder({required this.id, required this.title,
-    required this.notes, required this.date});
+    required this.notes, required this.date, this.remindBeforeMinutes = 0});
   Map<String, dynamic> toJson() => {'id': id, 'title': title,
-    'notes': notes, 'date': date.toIso8601String()};
+    'notes': notes, 'date': date.toIso8601String(),
+    'remindBeforeMinutes': remindBeforeMinutes};
   factory PersonalReminder.fromJson(Map<String, dynamic> j) => PersonalReminder(
     id: j['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
     title: j['title']?.toString() ?? '', notes: j['notes']?.toString() ?? '',
-    date: DateTime.tryParse(j['date']?.toString() ?? '') ?? DateTime.now());
+    date: DateTime.tryParse(j['date']?.toString() ?? '') ?? DateTime.now(),
+    remindBeforeMinutes: (j['remindBeforeMinutes'] as num?)?.toInt() ?? 0);
 }
 
 class PersonalReminderScreen extends StatefulWidget {
   final bool malayalam;
-  const PersonalReminderScreen({super.key, required this.malayalam});
+  final DateTime? initialDate;
+  const PersonalReminderScreen({super.key, required this.malayalam, this.initialDate});
   @override
   State<PersonalReminderScreen> createState() => _PersonalReminderScreenState();
 }
@@ -708,6 +753,9 @@ class _PersonalReminderScreenState extends State<PersonalReminderScreen> {
         PersonalReminder.fromJson(Map<String, dynamic>.from(e))).toList(); }
       catch (_) { items = []; }
     }
+    for (final item in items) {
+      await OrmaNotifications.instance.schedulePersonal(item, malayalam: ml);
+    }
     if (mounted) setState(() => loading = false);
   }
   Future<void> persist() async {
@@ -717,7 +765,8 @@ class _PersonalReminderScreenState extends State<PersonalReminderScreen> {
   Future<void> editItem({PersonalReminder? old}) async {
     final title = TextEditingController(text: old?.title ?? '');
     final notes = TextEditingController(text: old?.notes ?? '');
-    DateTime date = old?.date ?? DateTime.now();
+    DateTime date = old?.date ?? widget.initialDate ?? DateTime.now();
+    int remindBefore = old?.remindBeforeMinutes ?? 0;
     final result = await showDialog<PersonalReminder>(context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setDialog) => AlertDialog(
         title: Text(old == null ? tr('പുതിയ ഓർമ്മപ്പെടുത്തൽ', 'New personal reminder') : tr('തിരുത്തുക', 'Edit reminder')),
@@ -729,16 +778,31 @@ class _PersonalReminderScreenState extends State<PersonalReminderScreen> {
           OutlinedButton.icon(onPressed: () async {
             final d = await showDatePicker(context: ctx, initialDate: date,
               firstDate: DateTime(2020), lastDate: DateTime(2100));
-            if (d != null) setDialog(() => date = d);
+            if (d != null) setDialog(() => date = DateTime(d.year, d.month, d.day, date.hour, date.minute));
           }, icon: const Icon(Icons.calendar_today),
             label: Text('${date.day}/${date.month}/${date.year}')),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(onPressed: () async {
+            final t = await showTimePicker(context: ctx, initialTime: TimeOfDay.fromDateTime(date));
+            if (t != null) setDialog(() => date = DateTime(date.year, date.month, date.day, t.hour, t.minute));
+          }, icon: const Icon(Icons.access_time),
+            label: Text(TimeOfDay.fromDateTime(date).format(ctx))),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<int>(
+            value: remindBefore,
+            decoration: InputDecoration(labelText: tr('എത്ര സമയം മുൻപ് അറിയിക്കണം?', 'Remind me before')),
+            items: <int, String>{0:'അന്നേ സമയം / At the time',5:'5 മിനിറ്റ് മുൻപ് / 5 minutes',15:'15 മിനിറ്റ് മുൻപ് / 15 minutes',30:'30 മിനിറ്റ് മുൻപ് / 30 minutes',60:'1 മണിക്കൂർ മുൻപ് / 1 hour',1440:'1 ദിവസം മുൻപ് / 1 day'}
+              .entries.map((e) => DropdownMenuItem(value:e.key, child:Text(e.value))).toList(),
+            onChanged: (v) { if (v != null) setDialog(() => remindBefore = v); },
+          ),
         ])),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('റദ്ദാക്കുക', 'Cancel'))),
           FilledButton(onPressed: () {
             if (title.text.trim().isEmpty) return;
             Navigator.pop(ctx, PersonalReminder(id: old?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-              title: title.text.trim(), notes: notes.text.trim(), date: date));
+              title: title.text.trim(), notes: notes.text.trim(), date: date,
+              remindBeforeMinutes: remindBefore));
           }, child: Text(tr('സേവ്', 'Save'))),
         ],
       )));
@@ -750,13 +814,19 @@ class _PersonalReminderScreenState extends State<PersonalReminderScreen> {
       items.sort((a,b) => a.date.compareTo(b.date));
     });
     await persist();
+    await OrmaNotifications.instance.requestPermission();
+    await OrmaNotifications.instance.schedulePersonal(result, malayalam: ml);
   }
   Future<void> remove(PersonalReminder item) async {
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       title: Text(tr('നീക്കം ചെയ്യണോ?', 'Delete reminder?')),
       actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('വേണ്ട', 'Cancel'))),
         FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('നീക്കം ചെയ്യുക', 'Delete')))]));
-    if (ok == true) { setState(() => items.removeWhere((e) => e.id == item.id)); await persist(); }
+    if (ok == true) {
+      setState(() => items.removeWhere((e) => e.id == item.id));
+      await persist();
+      await OrmaNotifications.instance.cancelPersonal(item.id);
+    }
   }
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -767,7 +837,7 @@ class _PersonalReminderScreenState extends State<PersonalReminderScreen> {
       ? Center(child: Text(tr('ഇതുവരെ ഓർമ്മപ്പെടുത്തലുകളില്ല', 'No personal reminders yet')))
       : ListView(padding: const EdgeInsets.all(16), children: items.map((e) => Card(
         child: ListTile(leading: const Icon(Icons.notifications_active_outlined),
-          title: Text(e.title), subtitle: Text('${e.date.day}/${e.date.month}/${e.date.year}${e.notes.isEmpty ? '' : '\n${e.notes}'}'),
+          title: Text(e.title), subtitle: Text('${e.date.day}/${e.date.month}/${e.date.year}  ${TimeOfDay.fromDateTime(e.date).format(context)}${e.notes.isEmpty ? '' : '\n${e.notes}'}'),
           onTap: () => editItem(old: e), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => remove(e))))).toList()),
   );
 }
@@ -775,7 +845,15 @@ class _PersonalReminderScreenState extends State<PersonalReminderScreen> {
 class OrmaCalendarScreen extends StatefulWidget {
   final List<Reminder> reminders;
   final bool malayalam;
-  const OrmaCalendarScreen({super.key, required this.reminders, required this.malayalam});
+  final Future<Reminder?> Function({Reminder? reminder, DateTime? initialDueDate}) onAddPaymentReminder;
+
+  const OrmaCalendarScreen({
+    super.key,
+    required this.reminders,
+    required this.malayalam,
+    required this.onAddPaymentReminder,
+  });
+
   @override
   State<OrmaCalendarScreen> createState() => _OrmaCalendarScreenState();
 }
@@ -784,62 +862,300 @@ class _OrmaCalendarScreenState extends State<OrmaCalendarScreen> {
   DateTime month = DateTime(DateTime.now().year, DateTime.now().month);
   DateTime selected = DateTime.now();
   List<PersonalReminder> personal = [];
+
   bool get ml => widget.malayalam;
   String tr(String a, String b) => ml ? a : b;
-  bool same(DateTime a, DateTime b) => a.year == b.year && a.month == b.month && a.day == b.day;
+
+  bool same(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  static const Map<String, Color> categoryColors = {
+    'EMI': Color(0xFF3976B8),
+    'Loan': Color(0xFF8A63B5),
+    'Chitty': Color(0xFFC65B75),
+    'Electricity': Color(0xFFE39A32),
+    'Water': Color(0xFF2996A8),
+    'Insurance': Color(0xFF4B9270),
+    'Rent': Color(0xFFB47B45),
+    'Other': Color(0xFF777777),
+  };
+
   @override
-  void initState() { super.initState(); loadPersonal(); }
+  void initState() {
+    super.initState();
+    loadPersonal();
+  }
+
   Future<void> loadPersonal() async {
-    final p = await SharedPreferences.getInstance(); final raw = p.getString('orma_personal_reminders_v1');
-    if (raw != null) { try { personal = (jsonDecode(raw) as List).map((e) => PersonalReminder.fromJson(Map<String,dynamic>.from(e))).toList(); } catch (_) {} }
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('orma_personal_reminders_v1');
+    if (raw != null) {
+      try {
+        personal = (jsonDecode(raw) as List)
+            .map((e) => PersonalReminder.fromJson(
+                Map<String, dynamic>.from(e)))
+            .toList();
+      } catch (_) {
+        personal = [];
+      }
+    }
     if (mounted) setState(() {});
   }
+
+  List<Reminder> paymentRemindersOn(DateTime day) {
+    final matches = <Reminder>[];
+    for (final r in widget.reminders) {
+      if (r.paid || r.isComplete) continue;
+      var cursor = DateTime(r.dueDate.year, r.dueDate.month, r.dueDate.day);
+      final last = r.endDate == null
+          ? DateTime(month.year + 2, month.month, 0)
+          : DateTime(r.endDate!.year, r.endDate!.month, r.endDate!.day);
+      // One-time reminders have only one occurrence. Recurring reminders are
+      // expanded from the current unpaid due date, without changing saved data.
+      for (var count = 0;
+          !cursor.isAfter(last) && count < 500;
+          count++) {
+        if (same(cursor, day)) {
+          matches.add(r);
+          break;
+        }
+        if (r.frequency == 'One Time') break;
+        final next = nextScheduledDate(
+          cursor, r.frequency, r.monthlyMode, r.weekday, r.monthlyWeek);
+        if (!next.isAfter(cursor)) break;
+        cursor = next;
+      }
+    }
+    return matches;
+  }
+
+  List<String> personalTitlesOn(DateTime day) => personal
+      .where((r) => same(r.date, day))
+      .map((r) => r.title)
+      .toList();
+
+  Future<void> addFromCalendar() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.payments_outlined),
+            title: Text(tr('അടവ് Reminder', 'Payment Reminder')),
+            onTap: () => Navigator.pop(ctx, 'payment'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.notifications_active_outlined),
+            title: Text(tr('Personal Reminder', 'Personal Reminder')),
+            onTap: () => Navigator.pop(ctx, 'personal'),
+          ),
+        ]),
+      ),
+    );
+    if (!mounted || choice == null) return;
+
+    if (choice == 'payment') {
+      final result = await widget.onAddPaymentReminder(initialDueDate: selected);
+      if (result != null && mounted) {
+        setState(() {
+          if (!widget.reminders.any((r) => r.id == result.id)) {
+            widget.reminders.add(result);
+          }
+          selected = result.dueDate;
+          month = DateTime(selected.year, selected.month);
+        });
+      }
+    } else {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PersonalReminderScreen(malayalam: ml, initialDate: selected),
+        ),
+      );
+      await loadPersonal();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final first = DateTime(month.year, month.month, 1);
     final start = first.subtract(Duration(days: first.weekday - 1));
     final cells = List.generate(42, (i) => start.add(Duration(days: i)));
-    final due = widget.reminders.where((r) => !r.paid && same(r.dueDate, selected)).toList();
+    final due = paymentRemindersOn(selected);
     final own = personal.where((r) => same(r.date, selected)).toList();
-    final weekdays = ml ? ['തിങ്കൾ','ചൊവ്വ','ബുധൻ','വ്യാഴം','വെള്ളി','ശനി','ഞായർ'] : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-    return Scaffold(appBar: AppBar(title: Text(tr('കലണ്ടർ', 'Calendar'))),
-      body: ListView(padding: const EdgeInsets.all(16), children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          IconButton(onPressed: () => setState(() { month = DateTime(month.year, month.month-1); }), icon: const Icon(Icons.chevron_left)),
-          Text('${month.month}/${month.year}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          IconButton(onPressed: () => setState(() { month = DateTime(month.year, month.month+1); }), icon: const Icon(Icons.chevron_right)),
-        ]),
-        Row(children: weekdays.map((d) => Expanded(child: Center(child: Text(d, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold))))).toList()),
-        const SizedBox(height: 8),
-        GridView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-          itemCount: 42, gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 1.15),
-          itemBuilder: (ctx, i) {
-            final d = cells[i]; final inMonth = d.month == month.month;
-            final hasDue = widget.reminders.any((r) => !r.paid && same(r.dueDate,d)) || personal.any((r) => same(r.date,d));
-            return InkWell(onTap: () => setState(() => selected = d), child: Container(
-              margin: const EdgeInsets.all(2), decoration: BoxDecoration(
-                color: same(d, selected) ? Theme.of(context).colorScheme.primaryContainer : null,
-                borderRadius: BorderRadius.circular(10)),
-              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Text('${d.day}', style: TextStyle(color: inMonth ? null : Colors.black26, fontWeight: same(d,selected) ? FontWeight.bold : FontWeight.normal)),
-                if (hasDue) Container(width: 5, height: 5, decoration: const BoxDecoration(color: Colors.deepOrange, shape: BoxShape.circle)),
+    final weekdays = ml
+        ? ['തിങ്കൾ', 'ചൊവ്വ', 'ബുധൻ', 'വ്യാഴം', 'വെള്ളി', 'ശനി', 'ഞായർ']
+        : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('കലണ്ടർ', 'Calendar'))),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: addFromCalendar,
+        icon: const Icon(Icons.add),
+        label: Text(tr('റിമൈൻഡർ ചേർക്കുക', 'Add Reminder')),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                onPressed: () => setState(() {
+                  month = DateTime(month.year, month.month - 1);
+                }),
+                icon: const Icon(Icons.chevron_left),
+              ),
+              Text(
+                '${month.month}/${month.year}',
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              IconButton(
+                onPressed: () => setState(() {
+                  month = DateTime(month.year, month.month + 1);
+                }),
+                icon: const Icon(Icons.chevron_right),
+              ),
+            ],
+          ),
+          Row(
+            children: weekdays
+                .map((d) => Expanded(
+                      child: Center(
+                        child: Text(d,
+                            style: const TextStyle(
+                                fontSize: 11, fontWeight: FontWeight.bold)),
+                      ),
+                    ))
+                .toList(),
+          ),
+          const SizedBox(height: 8),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: 42,
+            gridDelegate:
+                const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 7, childAspectRatio: 1.05),
+            itemBuilder: (ctx, i) {
+              final d = cells[i];
+              final inMonth = d.month == month.month;
+              final dayPayments = paymentRemindersOn(d);
+              final hasPersonal = personal.any((r) => same(r.date, d));
+              final colors = <Color>[
+                ...dayPayments.map((r) =>
+                    categoryColors[r.category] ?? categoryColors['Other']!),
+                if (hasPersonal) const Color(0xFFC66A38),
+              ].toSet().toList();
+
+              return InkWell(
+                onTap: () => setState(() => selected = d),
+                child: Container(
+                  margin: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: same(d, selected)
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : null,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '${d.day}',
+                        style: TextStyle(
+                          color: inMonth ? null : Colors.black26,
+                          fontWeight: same(d, selected)
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                      if (colors.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 2,
+                          children: colors.take(4).map((c) => Container(
+                            width: 5,
+                            height: 5,
+                            decoration: BoxDecoration(
+                                color: c, shape: BoxShape.circle),
+                          )).toList(),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
+            children: [
+              ...categoryColors.entries.map((e) => Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                              color: e.value, shape: BoxShape.circle)),
+                      const SizedBox(width: 4),
+                      Text(e.key, style: const TextStyle(fontSize: 10)),
+                    ],
+                  )),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                        color: Color(0xFFC66A38), shape: BoxShape.circle)),
+                const SizedBox(width: 4),
+                Text(tr('വ്യക്തിഗതം', 'Personal'),
+                    style: const TextStyle(fontSize: 10)),
               ]),
-            ));
-          }),
-        const Divider(height: 24),
-        Text('${tr('തിരഞ്ഞെടുത്ത തീയതി', 'Selected date')}: ${selected.day}/${selected.month}/${selected.year}', style: const TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        if (due.isEmpty && own.isEmpty) Text(tr('ഈ തീയതിയിൽ റിമൈൻഡറുകളില്ല', 'No reminders on this date')),
-        ...due.map((r) => ListTile(leading: const Icon(Icons.payments_outlined), title: Text(r.title), subtitle: Text('${r.category} • ₹${r.amount.toStringAsFixed(2)}'))),
-        ...own.map((r) => ListTile(leading: const Icon(Icons.notifications_active_outlined), title: Text(r.title), subtitle: Text(r.notes))),
-      ]));
+            ],
+          ),
+          const Divider(height: 24),
+          Text(
+            '${tr('തിരഞ്ഞെടുത്ത തീയതി', 'Selected date')}: '
+            '${selected.day}/${selected.month}/${selected.year}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          if (due.isEmpty && own.isEmpty)
+            Text(tr('ഈ തീയതിയിൽ റിമൈൻഡറുകളില്ല',
+                'No reminders on this date')),
+          ...due.map((r) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.payments_outlined,
+                    color: categoryColors[r.category] ??
+                        categoryColors['Other']),
+                title: Text(r.title),
+                subtitle: Text(
+                    '${r.category} • ₹${r.amount.toStringAsFixed(2)} • ${r.frequency}'),
+              )),
+          ...own.map((r) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.notifications_active_outlined,
+                    color: Color(0xFFC66A38)),
+                title: Text(r.title),
+                subtitle: Text(r.notes),
+              )),
+        ],
+      ),
+    );
   }
 }
 
 class ReminderForm extends StatefulWidget {
   final bool malayalam;
   final Reminder? reminder;
-  const ReminderForm({super.key, required this.malayalam, this.reminder});
+  final DateTime? initialDueDate;
+  const ReminderForm({super.key, required this.malayalam, this.reminder, this.initialDueDate});
   @override
   State<ReminderForm> createState() => _ReminderFormState();
 }
@@ -884,8 +1200,8 @@ class _ReminderFormState extends State<ReminderForm> {
     monthlyMode = r?.monthlyMode ?? 'Date';
     weekday = r?.weekday ?? 'Monday';
     monthlyWeek = r?.monthlyWeek ?? 'First';
-    startDate = r?.startDate ?? DateTime.now();
-    dueDate = r?.dueDate ?? DateTime.now();
+    startDate = r?.startDate ?? widget.initialDueDate ?? DateTime.now();
+    dueDate = r?.dueDate ?? widget.initialDueDate ?? DateTime.now();
     endDate = r?.endDate;
     useEndDate = endDate != null;
     paid = r?.paid ?? false;
